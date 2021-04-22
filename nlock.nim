@@ -9,13 +9,11 @@
 
 # Low level system locks and condition vars.
 
-{.push stackTrace: off.}
-
 when defined(windows):
   type
     Handle = int
 
-    DWORD = int32
+    DWORD = cuint
 
     SysLock {.importc: "CRITICAL_SECTION",
               header: "<windows.h>", final, pure.} = object # CRITICAL_SECTION in WinApi
@@ -58,7 +56,7 @@ when defined(windows):
 
   proc sleepConditionVariableCS(
     conditionVariable: var SysCond,
-    PCRITICAL_SECTION: SysLock,
+    PCRITICAL_SECTION: var SysLock,
     dwMilliseconds: int
   ): int32 {.stdcall, noSideEffect, dynlib: "kernel32", importc: "SleepConditionVariableCS".}
 
@@ -86,16 +84,14 @@ elif defined(genode):
 
   proc initSysLock(L: var SysLock) = discard
   proc deinitSys(L: var SysLock) = discard
-  proc acquireSys(L: var SysLock) {.noSideEffect, importcpp.}
-  proc tryAcquireSys(L: var SysLock): bool {.noSideEffect, importcpp.}
-  proc releaseSys(L: var SysLock) {.noSideEffect, importcpp.}
+  func acquireSys(L: var SysLock) {.importcpp.}
+  func tryAcquireSys(L: var SysLock): bool {.importcpp.}
+  func releaseSys(L: var SysLock) {.importcpp.}
 
   proc initSysCond(L: var SysCond) = discard
   proc deinitSysCond(L: var SysCond) = discard
-  proc waitSysCond(cond: var SysCond, lock: var SysLock) {.
-    noSideEffect, importcpp.}
-  proc signalSysCond(cond: var SysCond) {.
-    noSideEffect, importcpp.}
+  func waitSysCond(cond: var SysCond, lock: var SysLock) {.importcpp.}
+  func signalSysCond(cond: var SysCond) {.importcpp.}
 
 else:
   type
@@ -117,18 +113,18 @@ else:
 
     SysLockType = distinct cint
 
-  proc initSysLockAux(L: var SysLockObj, attr: ptr SysLockAttr) {.
-    importc: "pthread_mutex_init", header: "<pthread.h>", noSideEffect.}
-  proc deinitSysAux(L: var SysLockObj) {.noSideEffect,
-    importc: "pthread_mutex_destroy", header: "<pthread.h>".}
+  func initSysLockAux(L: var SysLockObj, attr: ptr SysLockAttr) {.
+    importc: "pthread_mutex_init", header: "<pthread.h>".}
+  func deinitSysAux(L: var SysLockObj) {.importc: "pthread_mutex_destroy",
+    header: "<pthread.h>".}
 
-  proc acquireSysAux(L: var SysLockObj) {.noSideEffect,
-    importc: "pthread_mutex_lock", header: "<pthread.h>".}
-  proc tryAcquireSysAux(L: var SysLockObj): cint {.noSideEffect,
-    importc: "pthread_mutex_trylock", header: "<pthread.h>".}
+  func acquireSysAux(L: var SysLockObj) {.importc: "pthread_mutex_lock",
+    header: "<pthread.h>".}
+  func tryAcquireSysAux(L: var SysLockObj): cint {.importc: "pthread_mutex_trylock",
+    header: "<pthread.h>".}
 
-  proc releaseSysAux(L: var SysLockObj) {.noSideEffect,
-    importc: "pthread_mutex_unlock", header: "<pthread.h>".}
+  func releaseSysAux(L: var SysLockObj) {.importc: "pthread_mutex_unlock",
+    header: "<pthread.h>".}
 
   when defined(ios):
     # iOS will behave badly if sync primitives are moved in memory. In order
@@ -188,6 +184,7 @@ else:
 
   proc waitSysCondAux(cond: var SysCondObj, lock: var SysLockObj): cint {.
     importc: "pthread_cond_wait", header: "<pthread.h>", noSideEffect.}
+
   proc signalSysCondAux(cond: var SysCondObj) {.
     importc: "pthread_cond_signal", header: "<pthread.h>", noSideEffect.}
   proc broadcastSysCondAux(cond: var SysCondObj) {.
@@ -221,22 +218,14 @@ else:
     template broadcastSysCond(cond: var SysCond) =
       broadcastSysCondAux(cond)
 
-{.pop.}
-
 type
   Lock* = object
     lock: SysLock ## Nim lock; whether this is re-entrant
                   ## or not is unspecified!
-  Cond* = object
-    cond: SysCond ## Nim condition variable
 
-
-{.push stackTrace: off.}
-
-proc initLock*(lock: var Lock) {.inline.} =
+proc init*(lock: var Lock) {.inline.} =
   ## Initializes the given lock.
-  when not defined(js):
-    initSysLock(lock.lock)
+  initSysLock(lock.lock)
 
 proc `=copy`*(x: var Lock, y: Lock) {.error.}
 
@@ -244,58 +233,34 @@ proc `=destroy`*(lock: var Lock) {.inline.} =
   ## Frees the resources associated with the lock.
   deinitSys(lock.lock)
 
-proc tryAcquire*(lock: var Lock): bool =
+proc tryAcquire*(lock: var Lock): bool {.inline.} =
   ## Tries to acquire the given lock. Returns `true` on success.
   result = tryAcquireSys(lock.lock)
 
-proc acquire*(lock: var Lock) =
+proc acquire*(lock: var Lock) {.inline.} =
   ## Acquires the given lock.
-  when not defined(js):
-    acquireSys(lock.lock)
+  acquireSys(lock.lock)
 
-proc release*(lock: var Lock) =
+proc release*(lock: var Lock) {.inline.} =
   ## Releases the given lock.
-  when not defined(js):
-    releaseSys(lock.lock)
+  releaseSys(lock.lock)
 
-template withLock*(a: Lock, body: untyped) =
+template withLock*(lock: Lock, body: untyped) =
   ## Acquires the given lock, executes the statements in body and
   ## releases the lock after the statements finish executing.
-  mixin acquire, release
-  acquire(a)
-  {.locks: [a].}:
+  acquire(lock)
+  {.locks: [lock].}:
     try:
       body
     finally:
-      release(a)
-
-proc initCond*(cond: var Cond) {.inline.} =
-  ## Initializes the given condition variable.
-  initSysCond(cond.cond)
-
-proc `=destroy`*(cond: var Cond) {.inline.} =
-  ## Frees the resources associated with the condition variable.
-  deinitSysCond(cond.cond)
-
-proc wait*(cond: var Cond, lock: var Lock) {.inline.} =
-  ## waits on the condition variable `cond`.
-  waitSysCond(cond.cond, lock.lock)
-
-proc signal*(cond: var Cond) {.inline.} =
-  ## sends a signal to the condition variable `cond`.
-  signalSysCond(cond.cond)
-
-proc broadcast*(cond: var Cond) {.inline.} =
-  ## Unblocks all threads currently blocked on the
-  ## specified condition variable `cond`.
-  broadcastSysCond(cond.cond)
+      release(lock)
 
 
 type
   RLock* = object
     lock: SysLock ## Nim lock, re-entrant
 
-proc initRLock*(lock: var RLock) {.inline.} =
+proc init*(lock: var RLock) {.inline.} =
   ## Initializes the given lock.
   when defined(posix):
     var a: SysLockAttr
@@ -309,25 +274,54 @@ proc `=destroy`*(lock: var RLock) {.inline.} =
   ## Frees the resources associated with the lock.
   deinitSys(lock.lock)
 
-proc tryAcquire*(lock: var RLock): bool =
+proc tryAcquire*(lock: var RLock): bool {.inline.} =
   ## Tries to acquire the given lock. Returns `true` on success.
   result = tryAcquireSys(lock.lock)
 
-proc acquire*(lock: var RLock) =
+proc acquire*(lock: var RLock) {.inline.} =
   ## Acquires the given lock.
   acquireSys(lock.lock)
 
-proc release*(lock: var RLock) =
+proc release*(lock: var RLock) {.inline.} =
   ## Releases the given lock.
   releaseSys(lock.lock)
 
-template withRLock*(lock: var RLock, code: untyped): untyped =
+template withLock*(lock: var RLock, body: untyped): untyped =
   ## Acquires the given lock and then executes the code.
-  block:
-    acquire(lock)
-    defer:
+  acquire(lock)
+  {.locks: [lock].}:
+    try:
+      body
+    finally:
       release(lock)
-    {.locks: [lock].}:
-      code
 
-{.pop.}
+
+type
+  Cond* = object
+    cond: SysCond ## Nim condition variable
+
+
+proc init*(cond: var Cond) {.inline.} =
+  ## Initializes the given condition variable.
+  initSysCond(cond.cond)
+
+proc `=destroy`*(cond: var Cond) {.inline.} =
+  ## Frees the resources associated with the condition variable.
+  deinitSysCond(cond.cond)
+
+proc wait*(cond: var Cond, lock: var Lock) {.inline.} =
+  ## waits on the condition variable `cond`.
+  waitSysCond(cond.cond, lock.lock)
+
+proc wait*(cond: var Cond, lock: var RLock) {.inline.} =
+  ## waits on the condition variable `cond`.
+  waitSysCond(cond.cond, lock.lock)
+
+proc signal*(cond: var Cond) {.inline.} =
+  ## sends a signal to the condition variable `cond`.
+  signalSysCond(cond.cond)
+
+proc broadcast*(cond: var Cond) {.inline.} =
+  ## Unblocks all threads currently blocked on the
+  ## specified condition variable `cond`.
+  broadcastSysCond(cond.cond)

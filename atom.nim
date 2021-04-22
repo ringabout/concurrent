@@ -192,6 +192,8 @@ else:
     cast[T](atomic_fetch_xor_explicit(addr(location.value), cast[nonAtomicType(T)](value), order))
 
 
+proc `=copy`*[T](x: var Atomic[T], y: Atomic[T]) {.error.}
+
 # Flag operations
 proc init*(location: var AtomicFlag) {.inline.} = clear(location)
 
@@ -248,3 +250,29 @@ proc `+=`*[T: SomeInteger](location: var Atomic[T]; value: T) {.inline.} =
 proc `-=`*[T: SomeInteger](location: var Atomic[T]; value: T) {.inline.} =
   ## Atomically decrements the atomic integer by some `value`.
   discard location.fetchSub(value)
+
+
+import std/os
+
+proc wakeByAddressAll(address: pointer) {.stdcall, importc: "WakeByAddressAll",
+                                         dynlib: "API-MS-Win-Core-Synch-l1-2-0.dll".}
+
+
+proc wakeByAddressSingle(address: pointer) {.stdcall, importc: "WakeByAddressSingle",
+                                         dynlib: "API-MS-Win-Core-Synch-l1-2-0.dll".}
+
+proc signal*[T](location: var Atomic[T]) =
+  when T is Trivial:
+    wakeByAddressSingle(addr location.value)
+  else:
+    wakeByAddressSingle(addr location.nonAtomicValue)
+
+
+proc broadcast*[T](location: var Atomic[T]) =
+  when T is Trivial:
+    wakeByAddressAll(addr location.value)
+  else:
+    wakeByAddressAll(addr location.nonAtomicValue)
+
+proc wait*[T](location: var Atomic[T]) =
+  sleep(0)
