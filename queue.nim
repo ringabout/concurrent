@@ -22,6 +22,8 @@ func init*[T](result: var BoundedQueue[T], size: int) {.inline.} =
   if result.buffer == nil:
     raise newException(OutOfMemDefect, "Could not allocate memory")
 
+proc `=copy`*[T](x: var BoundedQueue[T], y: BoundedQueue[T]) {.error.}
+
 proc `=destroy`*[T](x: var BoundedQueue[T]) {.inline.} =
   if x.buffer != nil:
     for i in 0 ..< x.size:
