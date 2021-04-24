@@ -1,5 +1,5 @@
 # concurrent
-upcoming concurrent library for Nim
+upcoming concurrent library for Nim stdlib
 
 Ref https://github.com/timotheecour/Nim/issues/693
 
