@@ -35,6 +35,8 @@ proc init*(mutex: var RecursiveMutex) {.inline.} =
   ## Initializes the given lock.
   initRLock(mutex.lock)
 
+proc `=copy`*(x: var RecursiveMutex, y: RecursiveMutex) {.error.}
+
 proc `=destroy`*(mutex: var RecursiveMutex) {.inline.} =
   ## Frees the resources associated with the lock.
   deinitRlock(mutex.lock)
